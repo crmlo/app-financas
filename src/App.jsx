@@ -4,11 +4,12 @@ import Auth from "./components/Auth";
 
 // ─── Supabase data layer ──────────────────────────────────────────────────────
 async function loadFromSupabase(familyId) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("app_data")
     .select("data")
     .eq("family_id", familyId)
     .single();
+  if (error) console.error("[loadFromSupabase] error:", error)
   return data?.data ?? null;
 }
 
@@ -476,26 +477,39 @@ export default function App() {
   // Check auth on mount and listen for changes
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session: s } }) => {
+      console.log("[auth] getSession →", s ? `user=${s.user.id}` : "no session")
       setSession(s)
       if (s) {
-        const { data: prof } = await supabase
+        const { data: prof, error: profErr } = await supabase
           .from("profiles")
           .select("*, families(*)")
           .eq("id", s.user.id)
           .single()
+        console.log("[auth] profile →", prof, profErr)
         setProfile(prof)
         if (prof?.family_id) {
           familyIdRef.current = prof.family_id
           const appData = await loadFromSupabase(prof.family_id)
+          console.log("[auth] app_data →", appData)
           setDataState(appData ?? { ...BLANK, familyCode: prof.families?.invite_code ?? "" })
+        } else {
+          console.warn("[auth] profile has no family_id — staying on auth screen")
         }
       }
       setAuthChecked(true)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s)
-      if (!s) { setProfile(null); setDataState(null); familyIdRef.current = null }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      console.log("[auth] onAuthStateChange →", event, s ? s.user.id : null)
+      // Only clear state on sign-out. Do NOT set session on SIGNED_IN here —
+      // handleAuth (called by the Auth component after full setup) is responsible
+      // for setting session+profile+data atomically to avoid a loading deadlock.
+      if (!s) {
+        setSession(null)
+        setProfile(null)
+        setDataState(null)
+        familyIdRef.current = null
+      }
     })
     return () => subscription.unsubscribe()
   }, [])
@@ -537,11 +551,14 @@ export default function App() {
   const upd = useCallback((fn) => setData(d => fn({ ...d })), [setData])
 
   const handleAuth = async (user, prof) => {
+    console.log("[handleAuth] user=", user.id, "family_id=", prof?.family_id)
     setSession({ user })
     setProfile(prof)
     familyIdRef.current = prof.family_id
     const appData = await loadFromSupabase(prof.family_id)
+    console.log("[handleAuth] app_data →", appData)
     setDataState(appData ?? { ...BLANK, familyCode: prof.families?.invite_code ?? "" })
+    setAuthChecked(true)
   }
 
   const handleLogout = async () => {
