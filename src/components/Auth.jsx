@@ -59,10 +59,22 @@ export default function Auth({ onAuth }) {
     if (!email || !password || !name) return
     setLoading(true)
     setError("")
-    const { data, error: err } = await supabase.auth.signUp({ email, password })
+
+    // 1. Create auth user — the DB trigger auto-creates the profile row
+    const { data, error: err } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { name } },  // passed to raw_user_meta_data for the trigger
+    })
     if (err) { setError(err.message); setLoading(false); return }
-    // Create profile without family yet
-    await supabase.from("profiles").insert({ id: data.user.id, name, role: "master" })
+
+    // 2. Make sure the trigger had time to run, then update the name
+    //    (upsert is safe: trigger may have already inserted the row)
+    const { error: profErr } = await supabase
+      .from("profiles")
+      .upsert({ id: data.user.id, name, role: "master" }, { onConflict: "id" })
+    if (profErr) { setError(profErr.message); setLoading(false); return }
+
     setPendingUser(data.user)
     setMode("family")
     setLoading(false)
@@ -76,28 +88,65 @@ export default function Auth({ onAuth }) {
 
     if (familyMode === "create") {
       if (!familyName) { setError("Digite o nome da família"); setLoading(false); return }
+
+      // 1. Create the family
       const code = "FAM-" + Math.random().toString(36).substr(2, 5).toUpperCase()
       const { data: fam, error: famErr } = await supabase
         .from("families")
         .insert({ name: familyName, invite_code: code })
         .select()
         .single()
-      if (famErr) { setError(famErr.message); setLoading(false); return }
-      await supabase.from("profiles").update({ family_id: fam.id, role: "master" }).eq("id", user.id)
-      // Create initial empty app_data row for this family
-      await supabase.from("app_data").insert({ family_id: fam.id, data: null })
-      const { data: profile } = await supabase.from("profiles").select("*, families(*)").eq("id", user.id).single()
+      if (famErr) { setError("Erro ao criar família: " + famErr.message); setLoading(false); return }
+
+      // 2. Link the profile to the family
+      const { error: updErr } = await supabase
+        .from("profiles")
+        .update({ family_id: fam.id, role: "master" })
+        .eq("id", user.id)
+      if (updErr) { setError("Erro ao vincular família: " + updErr.message); setLoading(false); return }
+
+      // 3. Create the initial empty app_data row for this family
+      const { error: adErr } = await supabase
+        .from("app_data")
+        .insert({ family_id: fam.id, data: null })
+      if (adErr) { setError("Erro ao inicializar dados: " + adErr.message); setLoading(false); return }
+
+      // 4. Fetch the full profile (with family join) to pass to the app
+      const { data: profile, error: pErr } = await supabase
+        .from("profiles")
+        .select("*, families(*)")
+        .eq("id", user.id)
+        .single()
+      if (pErr || !profile) { setError("Erro ao carregar perfil: " + (pErr?.message ?? "perfil não encontrado")); setLoading(false); return }
+
       onAuth(user, profile)
+
     } else {
       if (!inviteCode) { setError("Digite o código de convite"); setLoading(false); return }
+
+      // 1. Look up the family by invite code
       const { data: fam, error: famErr } = await supabase
         .from("families")
         .select()
         .eq("invite_code", inviteCode.toUpperCase().trim())
         .single()
       if (famErr || !fam) { setError("Código de convite inválido"); setLoading(false); return }
-      await supabase.from("profiles").update({ family_id: fam.id, role: "member" }).eq("id", user.id)
-      const { data: profile } = await supabase.from("profiles").select("*, families(*)").eq("id", user.id).single()
+
+      // 2. Link the profile to the family
+      const { error: updErr } = await supabase
+        .from("profiles")
+        .update({ family_id: fam.id, role: "member" })
+        .eq("id", user.id)
+      if (updErr) { setError("Erro ao entrar na família: " + updErr.message); setLoading(false); return }
+
+      // 3. Fetch the full profile
+      const { data: profile, error: pErr } = await supabase
+        .from("profiles")
+        .select("*, families(*)")
+        .eq("id", user.id)
+        .single()
+      if (pErr || !profile) { setError("Erro ao carregar perfil: " + (pErr?.message ?? "perfil não encontrado")); setLoading(false); return }
+
       onAuth(user, profile)
     }
     setLoading(false)

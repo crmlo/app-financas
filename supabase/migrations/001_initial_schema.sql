@@ -2,6 +2,10 @@
 -- STEP 1 — Drop everything cleanly (safe to run multiple times)
 -- ============================================================
 
+-- Drop trigger + function first
+drop trigger  if exists on_auth_user_created on auth.users;
+drop function if exists public.handle_new_user();
+
 -- Drop policies
 drop policy if exists "family members can view their family"    on public.families;
 drop policy if exists "authenticated users can create a family" on public.families;
@@ -155,7 +159,40 @@ create policy "family members can update app_data"
   using (family_id = public.get_my_family_id());
 
 -- ============================================================
--- STEP 8 — Realtime
+-- STEP 8 — Trigger: auto-create profile on auth.users insert
+--
+-- When a user signs up via supabase.auth.signUp(), a row is inserted
+-- into auth.users. This trigger immediately creates the corresponding
+-- row in public.profiles so the app never has to do it manually.
+--
+-- The name comes from user_metadata.name (set at signUp time).
+-- family_id starts as NULL — the user links it during onboarding.
+-- ============================================================
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (id, name, role)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
+    'master'
+  )
+  on conflict (id) do nothing;  -- idempotent: skip if profile already exists
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+-- ============================================================
+-- STEP 9 — Realtime
 -- ============================================================
 
 -- Only add if not already a member of the publication
