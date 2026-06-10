@@ -89,14 +89,20 @@ export default function Auth({ onAuth }) {
     if (familyMode === "create") {
       if (!familyName) { setError("Digite o nome da família"); setLoading(false); return }
 
-      // 1. Create the family
+      // 1. Create the family — insert without RETURNING to avoid RLS blocking the result,
+      //    then fetch by invite_code (which we already know) in a separate SELECT.
       const code = "FAM-" + Math.random().toString(36).substr(2, 5).toUpperCase()
-      const { data: fam, error: famErr } = await supabase
+      const { error: famErr } = await supabase
         .from("families")
         .insert({ name: familyName, invite_code: code })
-        .select()
-        .single()
       if (famErr) { setError("Erro ao criar família: " + famErr.message); setLoading(false); return }
+
+      const { data: fam, error: famFetchErr } = await supabase
+        .from("families")
+        .select("id")
+        .eq("invite_code", code)
+        .single()
+      if (famFetchErr || !fam) { setError("Erro ao buscar família criada: " + (famFetchErr?.message ?? "")); setLoading(false); return }
 
       // 2. Link the profile to the family
       const { error: updErr } = await supabase
