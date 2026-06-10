@@ -60,20 +60,20 @@ export default function Auth({ onAuth }) {
     setLoading(true)
     setError("")
 
-    // 1. Create auth user — the DB trigger auto-creates the profile row
+    // 1. Create auth user
     const { data, error: err } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { name } },  // passed to raw_user_meta_data for the trigger
+      options: { data: { name } },
     })
     if (err) { setError(err.message); setLoading(false); return }
 
-    // 2. Make sure the trigger had time to run, then update the name
-    //    (upsert is safe: trigger may have already inserted the row)
+    // 2. Create profile explicitly — trigger may not fire in all Supabase plans
     const { error: profErr } = await supabase
       .from("profiles")
       .upsert({ id: data.user.id, name, role: "master" }, { onConflict: "id" })
-    if (profErr) { setError(profErr.message); setLoading(false); return }
+    if (profErr) { setError("Erro ao criar perfil: " + profErr.message); setLoading(false); return }
+    console.log("[register] profile upserted for", data.user.id)
 
     setPendingUser(data.user)
     setMode("family")
@@ -127,9 +127,10 @@ export default function Auth({ onAuth }) {
         .from("profiles")
         .select("*, families(*)")
         .eq("id", user.id)
-        .single()
+        .maybeSingle()
       console.log("[createFamily] 4. profile=", profile, "pErr=", pErr)
-      if (pErr || !profile) { setError("Erro ao carregar perfil: " + (pErr?.message ?? "perfil não encontrado")); setLoading(false); return }
+      if (pErr) { setError("Erro ao carregar perfil: " + pErr.message); setLoading(false); return }
+      if (!profile) { setError("Perfil não encontrado — tente fazer login novamente"); setLoading(false); return }
 
       onAuth(user, profile)
 
@@ -156,8 +157,9 @@ export default function Auth({ onAuth }) {
         .from("profiles")
         .select("*, families(*)")
         .eq("id", user.id)
-        .single()
-      if (pErr || !profile) { setError("Erro ao carregar perfil: " + (pErr?.message ?? "perfil não encontrado")); setLoading(false); return }
+        .maybeSingle()
+      if (pErr) { setError("Erro ao carregar perfil: " + pErr.message); setLoading(false); return }
+      if (!profile) { setError("Perfil não encontrado — tente fazer login novamente"); setLoading(false); return }
 
       onAuth(user, profile)
     }
