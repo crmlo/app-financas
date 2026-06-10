@@ -89,34 +89,46 @@ export default function Auth({ onAuth }) {
     if (familyMode === "create") {
       if (!familyName) { setError("Digite o nome da família"); setLoading(false); return }
 
+      console.log("[createFamily] user.id=", user.id)
+
       // 1. Create the family
       const code = "FAM-" + Math.random().toString(36).substr(2, 5).toUpperCase()
+      console.log("[createFamily] 1. inserting family, code=", code)
       const { data: fam, error: famErr } = await supabase
         .from("families")
         .insert({ name: familyName, invite_code: code })
         .select("id, invite_code")
         .single()
-      if (famErr || !fam) { setError("Erro ao criar família: " + (famErr?.message ?? "")); setLoading(false); return }
+      console.log("[createFamily] 1. fam=", fam, "famErr=", famErr)
+      if (famErr || !fam) { setError("Erro ao criar família: " + (famErr?.message ?? "sem retorno")); setLoading(false); return }
 
       // 2. Link the profile to the family
-      const { error: updErr } = await supabase
+      console.log("[createFamily] 2. updating profile family_id=", fam.id)
+      const { data: updData, error: updErr } = await supabase
         .from("profiles")
         .update({ family_id: fam.id, role: "master" })
         .eq("id", user.id)
+        .select("id, family_id")
+      console.log("[createFamily] 2. updData=", updData, "updErr=", updErr)
       if (updErr) { setError("Erro ao vincular família: " + updErr.message); setLoading(false); return }
 
       // 3. Create the initial empty app_data row for this family
-      const { error: adErr } = await supabase
+      console.log("[createFamily] 3. inserting app_data for family_id=", fam.id)
+      const { data: adData, error: adErr } = await supabase
         .from("app_data")
         .insert({ family_id: fam.id, data: null })
+        .select("id")
+      console.log("[createFamily] 3. adData=", adData, "adErr=", adErr)
       if (adErr) { setError("Erro ao inicializar dados: " + adErr.message); setLoading(false); return }
 
       // 4. Fetch the full profile (with family join) to pass to the app
+      console.log("[createFamily] 4. fetching profile for user.id=", user.id)
       const { data: profile, error: pErr } = await supabase
         .from("profiles")
         .select("*, families(*)")
         .eq("id", user.id)
         .single()
+      console.log("[createFamily] 4. profile=", profile, "pErr=", pErr)
       if (pErr || !profile) { setError("Erro ao carregar perfil: " + (pErr?.message ?? "perfil não encontrado")); setLoading(false); return }
 
       onAuth(user, profile)
